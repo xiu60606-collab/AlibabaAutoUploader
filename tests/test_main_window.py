@@ -16,6 +16,11 @@ def window(app):
     widget = MainWindow()
     widget.show()
     app.processEvents()
+    from PySide6.QtTest import QTest
+    for _ in range(500):
+        app.processEvents()
+        if widget.refresh_worker is None: break
+        QTest.qWait(10)
     yield widget
     widget.close()
 
@@ -28,13 +33,13 @@ def test_navigation(window, app):
         assert button.isChecked()
 
 def test_demo_safety_and_model(window):
-    assert window.model.rowCount() == 3
+    assert window.model.rowCount() == 0
     assert window.model.columnCount() == 6
     assert window.model.data(QModelIndex()) is None
-    assert "模拟" in window.model.data(window.model.index(0, 4))
+    assert window.model.rows == []
     assert all(not button.isEnabled() for button in window.action_buttons)
     assert window.progress.value() == 0
-    assert len([v for v in window.findChildren(QTableView) if v.model() is window.model]) == 2
+    assert len([v for v in window.findChildren(QTableView) if v.model() is window.model]) == 1
 
 def test_resizing(window, app):
     assert window.size().width() == 1280

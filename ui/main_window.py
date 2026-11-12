@@ -7,12 +7,16 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QStackedWidget, QTableView, QProgressBar, QPlainTextEdit,
     QHeaderView, QAbstractItemView, QButtonGroup,
 )
-from core.demo_data import DEMO_PRODUCTS
-from ui.product_model import ProductTableModel
+from ui.database_model import DatabaseModel, ProductFilter, DatabaseReader
+from PySide6.QtWidgets import QLineEdit
 from ui.import_page import ImportPage
+from ui.image_panel import ImagePanel
+from ui.product_editor import ProductEditor
+from core.excel_template import FIELDS
+from PySide6.QtWidgets import QComboBox
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.3.0"
 PAGES = ("工作台", "产品管理", "产品导入", "自动上传", "上传记录", "软件设置")
 
 
@@ -28,11 +32,13 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Alibaba Product Auto Uploader · 演示模式")
+        self.setWindowTitle("Alibaba Product Auto Uploader · 本地产品管理")
         self.resize(1280, 800)
         self.setMinimumSize(1024, 680)
         self.setStyleSheet(Path(__file__).with_name("styles.qss").read_text(encoding="utf-8"))
-        self.model = ProductTableModel(DEMO_PRODUCTS, self)
+        self.model = DatabaseModel(self)
+        self.refresh_worker = None
+        self.refresh_pending = False
         root = QWidget()
         self.setCentralWidget(root)
         layout = QHBoxLayout(root)
@@ -53,7 +59,7 @@ class MainWindow(QMainWindow):
             self.nav_buttons.append(button)
             side.addWidget(button)
         side.addStretch()
-        side.addWidget(label("安全优先 · 默认草稿\n当前仅展示模拟数据", "sideNote"))
+        side.addWidget(label("安全优先 · 默认草稿\n本地数据 · 自动上传未启用", "sideNote"))
         layout.addWidget(sidebar)
         content = QWidget()
         content.setObjectName("content")
@@ -65,7 +71,7 @@ class MainWindow(QMainWindow):
         header.addWidget(label(f"版本 {APP_VERSION}", "muted"))
         body.addLayout(header)
         status = QHBoxLayout()
-        status.addWidget(label("当前运行模式：演示 / 仅保存草稿", "badge"))
+        status.addWidget(label("当前运行模式：本地管理 / 默认草稿", "badge"))
         status.addWidget(label("客户端：未连接（连接功能未启用）", "muted"))
         status.setStretch(0, 1)
         status.setStretch(1, 1)
@@ -76,7 +82,7 @@ class MainWindow(QMainWindow):
         descriptions = (
             "Excel 导入尚未启用。后续将支持产品资料校验与导入。",
             "自动上传尚未启用，未连接任何客户端。正式发布必须经人工确认。",
-            "暂无真实上传记录。工作台中的产品均为模拟数据。",
+            "暂无真实上传记录。尚未执行真实上传。",
             "当前默认保存草稿，正式发布需要人工确认。配置编辑尚未启用。",
         )
         for title, description in zip(PAGES[2:], descriptions):
@@ -90,6 +96,10 @@ class MainWindow(QMainWindow):
             box.addWidget(label(description, "muted"))
             box.addStretch()
             self.stack.addWidget(page)
+        self.import_page.imported.connect(self.refresh_image_products)
+        self.import_page.root_changed.connect(self.set_image_root)
+        self.image_panel.root_button.clicked.connect(self.refresh_image_products)
+        self.refresh_image_products()
         body.addWidget(self.stack, 1)
         actions = QHBoxLayout()
         self.action_buttons: list[QPushButton] = []
@@ -104,7 +114,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(content, 1)
         self.nav_group.idClicked.connect(self.switch_page)
         self.nav_buttons[0].setChecked(True)
-        self.statusBar().showMessage("界面演示 · 无真实客户端连接 · 无真实上传操作")
+        self.statusBar().showMessage("本地产品管理 · 无真实客户端连接 · 无真实上传操作")
 
     def switch_page(self, index: int) -> None:
         """切换导航页面并记录界面操作。"""
@@ -129,17 +139,20 @@ class MainWindow(QMainWindow):
         box = QVBoxLayout(page)
         box.setContentsMargins(0, 0, 0, 0)
         box.addWidget(label("工作台", "pageTitle"))
-        box.addWidget(label("模拟产品预览 · 以下统计不代表真实上传结果", "muted"))
+        box.addWidget(label("SQLite 产品统计 · 数据校验通过不代表上传成功", "muted"))
         metrics = QHBoxLayout()
-        for title, value in (("产品总数（模拟）", len(DEMO_PRODUCTS)), ("待上传产品数（模拟）", len(DEMO_PRODUCTS)), ("草稿保存成功数", 0), ("失败产品数", 0)):
+        self.metric_labels = []
+        for title, value in (("产品总数", 0), ("待处理产品数量", 0), ("数据校验通过数量", 0), ("数据校验失败数量", 0)):
             card = QFrame()
             card.setObjectName("card")
             card_box = QVBoxLayout(card)
             card_box.addWidget(label(title, "muted"))
-            card_box.addWidget(label(str(value), "metric"))
+            metric = label(str(value), "metric")
+            self.metric_labels.append(metric)
+            card_box.addWidget(metric)
             metrics.addWidget(card)
         box.addLayout(metrics)
-        box.addWidget(label("产品任务表格 · 模拟数据"))
+        box.addWidget(label("产品数据 · SQLite"))
         box.addWidget(self.table(), 1)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
@@ -150,7 +163,7 @@ class MainWindow(QMainWindow):
         self.logs = QPlainTextEdit()
         self.logs.setReadOnly(True)
         self.logs.setMaximumHeight(100)
-        self.logs.setPlainText("[界面] 已加载模拟产品数据。\n[状态] 未连接客户端，未执行导入或上传操作。")
+        self.logs.setPlainText("[界面] 正在读取本地产品数据库。\n[状态] 未连接客户端，未执行导入或上传操作。")
         box.addWidget(self.logs)
         return page
 
@@ -159,15 +172,107 @@ class MainWindow(QMainWindow):
         box = QVBoxLayout(page)
         box.setContentsMargins(0, 0, 0, 0)
         box.addWidget(label("产品管理", "pageTitle"))
-        box.addWidget(label("只读模拟产品列表 · 编辑与持久化尚未启用", "muted"))
-        box.addWidget(self.table())
+        box.addWidget(label("SQLite 产品列表 · 校验结果仅为本地通用检查", "muted"))
+        filters = QHBoxLayout()
+        self.search = QLineEdit(); self.search.setPlaceholderText("搜索产品编号或标题")
+        self.status_filter = QComboBox(); self.status_filter.addItems(["全部", "数据校验通过", "数据校验失败"])
+        filters.addWidget(self.search); filters.addWidget(self.status_filter)
+        box.addLayout(filters)
+        self.proxy = ProductFilter(self); self.proxy.setSourceModel(self.model)
+        self.product_table = self.table(); self.product_table.setModel(self.proxy)
+        self.search.textChanged.connect(self.apply_filters)
+        self.status_filter.currentTextChanged.connect(self.apply_filters)
+        self.product_table.clicked.connect(self.select_table_product)
+        self.product_table.doubleClicked.connect(lambda index: self.edit_product())
+        box.addWidget(self.product_table)
+        self.image_products = QComboBox()
+        self.image_products.setPlaceholderText("选择已确认导入的产品以管理图片")
+        box.addWidget(self.image_products)
+        tools = QHBoxLayout()
+        edit = QPushButton("查看 / 编辑选中产品")
+        check = QPushButton("批量检查所有产品")
+        edit.clicked.connect(self.edit_product)
+        check.clicked.connect(self.check_products)
+        tools.addWidget(edit); tools.addWidget(check)
+        box.addLayout(tools)
+        self.validation_errors = QPlainTextEdit()
+        self.validation_errors.setReadOnly(True)
+        self.validation_errors.setMaximumHeight(90)
+        box.addWidget(self.validation_errors)
+        self.image_panel = ImagePanel(self)
+        box.addWidget(self.image_panel)
+        self.image_products.currentIndexChanged.connect(self.select_image_product)
         return page
 
     def closeEvent(self, event) -> None:
         """读取期间请求取消并暂缓关闭，避免销毁运行中的线程。"""
+        if self.refresh_worker is not None:
+            self.statusBar().showMessage("正在刷新产品，请稍后关闭。")
+            event.ignore(); return
+        if self.image_panel.worker is not None:
+            self.statusBar().showMessage("正在检查图片，请等待检查完成后关闭。")
+            event.ignore()
+            return
         if self.import_page.worker is not None:
             self.import_page.cancel_import()
             self.statusBar().showMessage("正在取消 Excel 读取，请稍后再次关闭窗口。")
             event.ignore()
             return
         super().closeEvent(event)
+
+    def refresh_image_products(self) -> None:
+        if self.refresh_worker is not None:
+            self.refresh_pending = True; return
+        self.refresh_worker = DatabaseReader(self.import_page.store.path, self.image_panel.root, self)
+        self.refresh_worker.ready.connect(self.apply_snapshot)
+        self.refresh_worker.failed.connect(lambda message: self.logs.appendPlainText("刷新失败：" + message))
+        self.refresh_worker.finished.connect(self.refresh_finished)
+        self.refresh_worker.start()
+
+    def refresh_finished(self) -> None:
+        worker = self.refresh_worker; self.refresh_worker = None
+        worker.deleteLater()
+        if self.refresh_pending:
+            self.refresh_pending = False; self.refresh_image_products()
+
+    def apply_snapshot(self, products, errors, counts) -> None:
+        self.model.replace(products, errors, counts)
+        self.image_products.clear()
+        for product in products:
+            self.image_products.addItem(f"{product.product_id} · {product.values[1]}", product)
+        passed = sum(not e for e in errors.values())
+        # 尚无上传任务模块，所有本地产品均待处理。
+        for widget, value in zip(self.metric_labels, (len(products), len(products), passed, len(products)-passed)):
+            widget.setText(str(value))
+        self.validation_errors.setPlainText("\n".join(f"{pid}：{len(e)} 个错误\n" + "\n".join(e) for pid,e in errors.items()) or "暂无产品")
+        self.logs.appendPlainText(f"已刷新 {len(products)} 个数据库产品；未执行上传。")
+
+    def apply_filters(self) -> None:
+        self.proxy.set_filters(self.search.text(), self.status_filter.currentText())
+
+    def select_table_product(self, index) -> None:
+        source = self.proxy.mapToSource(index)
+        self.image_products.setCurrentIndex(source.row())
+
+    def set_image_root(self, root) -> None:
+        self.image_panel.root = root
+        self.image_panel.root_label.setText(str(root))
+        self.image_panel.cache.clear()
+        self.refresh_image_products()
+
+    def select_image_product(self, index: int) -> None:
+        product = self.image_products.itemData(index)
+        if product is not None:
+            self.image_panel.select_product(product.product_id, str(product.values[FIELDS.index("image_folder")]))
+
+    def edit_product(self) -> None:
+        product = self.image_products.currentData()
+        if product is None:
+            self.validation_errors.setPlainText("请选择数据库产品"); return
+        dialog = ProductEditor(self.import_page.store, product, self.image_panel.root, self)
+        if dialog.exec():
+            self.image_panel.cache.clear()
+            self.refresh_image_products()
+
+    def check_products(self) -> None:
+        self.refresh_image_products()

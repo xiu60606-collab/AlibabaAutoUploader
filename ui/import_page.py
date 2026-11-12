@@ -3,7 +3,9 @@ import logging
 from pathlib import Path
 from threading import Event
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QThread, Signal
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, QFileDialog, QTableView, QPlainTextEdit, QLabel, QHeaderView
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, QFileDialog, QTableView, QPlainTextEdit, QLabel, QHeaderView, QMessageBox, QDialog, QDialogButtonBox
+from core.database import ProductDatabase, application_database_path
+import sqlite3
 from core.excel_template import FIELDS
 from core.excel_importer import read_products, ImportResult, MemoryProductStore
 
@@ -48,13 +50,20 @@ class Reader(QThread):
 
 class ImportPage(QWidget):
     """保留内存导入批次；取消或校验失败不会修改已保存产品。"""
-    def __init__(self, parent=None) -> None:
+    imported = Signal()
+    root_changed = Signal(object)
+
+    def __init__(self, parent=None, store=None) -> None:
         super().__init__(parent)
-        self.store = MemoryProductStore()
+        self.store = store if store is not None else ProductDatabase(application_database_path())
         self.worker: Reader | None = None
         box = QVBoxLayout(self)
-        box.addWidget(QLabel('产品导入 · 预览确认后仅保存在本次会话内存，退出后丢失'))
-        box.addWidget(QLabel('工作台仍展示模拟数据；本页导入不会触发上传。支持最多 100000 行。'))
+        box.addWidget(QLabel('产品导入 · 预览确认后保存到本机用户数据目录'))
+        box.addWidget(QLabel('确认后保存 SQLite；不会触发上传。支持最多 100000 行。'))
+        self.image_root_button = QPushButton('选择图片根目录')
+        self.image_root_label = QLabel('未选择图片根目录')
+        box.addWidget(self.image_root_button); box.addWidget(self.image_root_label)
+        self.image_root_button.clicked.connect(self.select_image_root)
         line = QHBoxLayout()
         self.path = QLineEdit()
         self.path.setReadOnly(True)
@@ -127,15 +136,47 @@ class ImportPage(QWidget):
         if self.worker is not None:
             return
         try:
-            self.store.commit(self.model.result)
-        except ValueError as exc:
+            result = self.model.result
+            count = len(result.products)
+            if isinstance(self.store, ProductDatabase):
+                diff = self.store.differences(result)
+                policy = 'cancel'
+                if diff:
+                    choice = QMessageBox(self)
+                    choice.setWindowTitle('重复产品处理')
+                    choice.setText(f'发现 {len(diff)} 个已有编号，请明确选择处理方式。')
+                    skip = choice.addButton('跳过重复产品', QMessageBox.ButtonRole.AcceptRole)
+                    update = choice.addButton('更新已有产品', QMessageBox.ButtonRole.ActionRole)
+                    choice.addButton('取消导入', QMessageBox.ButtonRole.RejectRole)
+                    choice.exec()
+                    if choice.clickedButton() is skip:
+                        policy = 'skip'
+                    elif choice.clickedButton() is update:
+                        dialog = QDialog(self)
+                        dialog.setWindowTitle('更新差异预览 · 确认后覆盖所列字段')
+                        dialog.resize(760, 520)
+                        layout = QVBoxLayout(dialog)
+                        text = QPlainTextEdit(); text.setReadOnly(True)
+                        text.setPlainText('\n'.join(f'{pid} · {field}: {old} → {new}' for pid,changes in diff.items() for field,(old,new) in changes.items()) or '重复产品字段相同，无字段差异。')
+                        layout.addWidget(text)
+                        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+                        buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject)
+                        layout.addWidget(buttons)
+                        if dialog.exec() != QDialog.DialogCode.Accepted:return
+                        policy = 'update'
+                    else:return
+                count = self.store.import_products(result, policy, diff if policy == 'update' else None)
+            else:
+                self.store.commit(result)
+        except (ValueError, sqlite3.Error, OSError) as exc:
+            logger.exception("数据库导入失败")
             self.errors.setPlainText(str(exc))
             return
-        count = len(self.model.result.products)
         self.confirm.setEnabled(False)
         self.model.replace(ImportResult())
-        self.errors.setPlainText(f'已确认保存 {count} 个产品至临时内存；未执行上传。')
-        logger.info('已确认内存导入 %d 个产品', count)
+        self.errors.setPlainText(f'已确认保存 {count} 个产品至产品存储；未执行上传。')
+        self.imported.emit()
+        logger.info('已确认产品导入 %d 个产品', count)
 
     def cancel_import(self) -> None:
         if self.worker is not None:
@@ -143,3 +184,9 @@ class ImportPage(QWidget):
         self.model.replace(ImportResult())
         self.confirm.setEnabled(False)
         self.errors.setPlainText('已取消待导入批次，已保存内存产品不变。')
+
+    def select_image_root(self) -> None:
+        selected = QFileDialog.getExistingDirectory(self, '选择图片根目录')
+        if selected:
+            self.image_root_label.setText(selected)
+            self.root_changed.emit(Path(selected))

@@ -36,10 +36,12 @@ def test_visible_table_resize_progress_and_demo_boundary():
         assert window.isVisible()
         assert not window.grab().isNull()
         table = window.stack.widget(0).findChild(QTableView)
-        for row, product in enumerate(DEMO_PRODUCTS):
-            expected = (product.number, product.title, product.price, product.images, product.status, product.updated)
-            for col, value in enumerate(expected):
-                assert table.model().data(table.model().index(row, col)) == value
+        from PySide6.QtTest import QTest
+        for _ in range(500):
+            app.processEvents()
+            if window.refresh_worker is None:break
+            QTest.qWait(10)
+        assert table.model().rowCount() == 0
         widths = []
         for width, height in [(1024, 680), (1440, 900)]:
             window.resize(width, height)
@@ -47,16 +49,16 @@ def test_visible_table_resize_progress_and_demo_boundary():
             widths.append(table.viewport().width())
             assert table.isVisible()
             assert window.progress.isVisible()
-            assert table.model().rowCount() == len(DEMO_PRODUCTS)
+            assert table.model().rowCount() == 0
         assert widths[1] > widths[0]
         assert window.progress.minimum() == 0
         assert window.progress.maximum() == 100
         assert window.progress.value() == 0
         assert '尚未执行' in window.progress.text()
         labels = [item.text() for item in window.findChildren(QLabel)]
-        assert any('不代表真实上传结果' in text for text in labels)
+        assert any('不代表上传成功' in text for text in labels)
         assert any('未连接' in text for text in labels)
-        assert [item.text() for item in window.findChildren(QLabel, 'metric')] == ['3', '3', '0', '0']
+        assert [item.text() for item in window.findChildren(QLabel, 'metric')] == ['0', '0', '0', '0']
         assert '未执行导入或上传操作' in window.logs.toPlainText()
         assert all(not b.isEnabled() and '未启用' in b.text() for b in window.action_buttons)
         assert all('模拟' in p.status for p in DEMO_PRODUCTS)
@@ -69,12 +71,15 @@ def test_visible_table_resize_progress_and_demo_boundary():
 
 
 @pytest.mark.parametrize('backend', ['offscreen', 'cocoa'])
-def test_main_entry_event_loop_and_clean_close(backend):
+def test_main_entry_event_loop_and_clean_close(backend, tmp_path):
     """在隔离进程执行真实入口，定时关闭主窗口，并捕获回调异常。"""
     if backend == 'cocoa' and os.environ.get('RUN_NATIVE_GUI_TESTS') != '1':
         pytest.skip('原生桌面测试未启用；在图形桌面终端设置 RUN_NATIVE_GUI_TESTS=1 执行，不能据此认定通过')
     script = r'''
 import runpy, sys
+from pathlib import Path
+import ui.import_page
+ui.import_page.application_database_path = lambda: Path(sys.argv[2])
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMainWindow
 errors = []
@@ -108,7 +113,7 @@ assert not errors, errors
 print('ENTRY_AND_CLOSE_OK')
 '''
     env = {**os.environ, 'QT_QPA_PLATFORM': backend, 'PYTHONDONTWRITEBYTECODE': '1'}
-    result = subprocess.run([sys.executable, '-B', '-c', script, str(ROOT/'main.py')], cwd=ROOT, env=env, capture_output=True, text=True, timeout=20)
+    result = subprocess.run([sys.executable, '-B', '-c', script, str(ROOT/'main.py'), str(tmp_path/'entry.sqlite3')], cwd=ROOT, env=env, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'ENTRY_AND_CLOSE_OK' in result.stdout
     assert 'Traceback' not in result.stderr
