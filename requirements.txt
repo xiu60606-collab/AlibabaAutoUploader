@@ -1,0 +1,8 @@
+# Runtime dependencies for this stage; Python 3.13.12.
+# Curated direct dependencies, not a macOS pip freeze.
+PySide6==6.12.0
+openpyxl==3.1.5
+Pillow==13.0.0
+
+# No Windows-only runtime dependencies are needed at this stage.
+# Future Windows-only entries must use: ; sys_platform == "win32"

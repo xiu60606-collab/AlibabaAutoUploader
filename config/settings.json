@@ -1,0 +1,5 @@
+{
+  "app_name": "Alibaba Product Auto Uploader",
+  "upload_mode": "draft",
+  "require_publish_confirmation": true
+}

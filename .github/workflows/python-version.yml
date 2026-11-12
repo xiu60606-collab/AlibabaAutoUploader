@@ -1,0 +1,18 @@
+name: Python version check
+
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  python-version:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.12'
+          architecture: ${{ runner.os == 'Windows' && 'x64' || 'arm64' }}
+      - name: Verify Python version
+        run: python -c "import sys; print(sys.version); assert sys.version_info[:3] == (3, 13, 12)"
