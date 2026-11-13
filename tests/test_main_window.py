@@ -25,7 +25,7 @@ def window(app):
     widget.close()
 
 def test_navigation(window, app):
-    assert window.stack.count() == 6
+    assert window.stack.count() == 7
     for index, button in enumerate(window.nav_buttons):
         QTest.mouseClick(button, Qt.MouseButton.LeftButton)
         app.processEvents()

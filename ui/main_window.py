@@ -11,13 +11,14 @@ from ui.database_model import DatabaseModel, ProductFilter, DatabaseReader
 from PySide6.QtWidgets import QLineEdit
 from ui.import_page import ImportPage
 from ui.image_panel import ImagePanel
+from ui.window_debug import WindowDebug
 from ui.product_editor import ProductEditor
 from core.excel_template import FIELDS
 from PySide6.QtWidgets import QComboBox
 
 logger = logging.getLogger(__name__)
 APP_VERSION = "0.3.0"
-PAGES = ("工作台", "产品管理", "产品导入", "自动上传", "上传记录", "软件设置")
+PAGES = ("工作台", "产品管理", "产品导入", "自动上传", "上传记录", "软件设置", "自动化调试")
 
 
 def label(text: str, name: str = "") -> QLabel:
@@ -94,8 +95,15 @@ class MainWindow(QMainWindow):
             box = QVBoxLayout(page)
             box.addWidget(label(title, "pageTitle"))
             box.addWidget(label(description, "muted"))
+            if title == "自动上传":
+                debug = QPushButton("自动化调试 · Windows 窗口识别")
+                debug.clicked.connect(lambda: WindowDebug(self).exec())
+                box.addWidget(debug)
             box.addStretch()
             self.stack.addWidget(page)
+        self.window_debug = WindowDebug(self)
+        self.window_debug.setWindowFlags(Qt.WindowType.Widget)
+        self.stack.addWidget(self.window_debug)
         self.import_page.imported.connect(self.refresh_image_products)
         self.import_page.root_changed.connect(self.set_image_root)
         self.image_panel.root_button.clicked.connect(self.refresh_image_products)
@@ -206,6 +214,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """读取期间请求取消并暂缓关闭，避免销毁运行中的线程。"""
+        if self.window_debug.worker is not None:
+            self.statusBar().showMessage("窗口检测执行中，请完成后关闭。")
+            event.ignore(); return
         if self.refresh_worker is not None:
             self.statusBar().showMessage("正在刷新产品，请稍后关闭。")
             event.ignore(); return

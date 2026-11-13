@@ -4,5 +4,5 @@ PySide6==6.12.0
 openpyxl==3.1.5
 Pillow==13.0.0
 
-# No Windows-only runtime dependencies are needed at this stage.
-# Future Windows-only entries must use: ; sys_platform == "win32"
+# Windows client window discovery only.
+pywin32==312; sys_platform == "win32"

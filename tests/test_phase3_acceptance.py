@@ -93,10 +93,10 @@ def bounded_exec(self):
         try:
             windows = [w for w in self.topLevelWidgets() if isinstance(w, QMainWindow)]
             assert len(windows) == 1 and windows[0].isVisible()
-            assert windows[0].stack.count() == 6
+            assert windows[0].stack.count() == 7
             for button in windows[0].nav_buttons:
                 button.click()
-            assert windows[0].stack.currentIndex() == 5
+            assert windows[0].stack.currentIndex() == 6
             assert windows[0].close()
         except BaseException:
             sys.excepthook(*sys.exc_info())
@@ -131,4 +131,4 @@ def test_no_automation_or_platform_specific_imports():
             elif isinstance(node, ast.ImportFrom):
                 assert (node.module or '').split('.')[0] not in prohibited
     runtime = (ROOT/'requirements.txt').read_text()
-    assert 'pywin32' not in runtime.lower()
+    assert 'pywin32==312; sys_platform == "win32"' in runtime
