@@ -214,6 +214,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """读取期间请求取消并暂缓关闭，避免销毁运行中的线程。"""
+        if not self.window_debug.input_panel.stop_for_close():
+            event.ignore(); return
         if self.window_debug.worker is not None:
             self.statusBar().showMessage("窗口检测执行中，请完成后关闭。")
             event.ignore(); return

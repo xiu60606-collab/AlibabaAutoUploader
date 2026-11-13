@@ -2,6 +2,7 @@
 from PySide6.QtCore import QAbstractTableModel,QModelIndex,Qt,QThread,Signal,Slot
 from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QLineEdit,QPushButton,QTableView,QLabel,QAbstractItemView
 from automation.windows import WindowService
+from ui.input_test import InputPanel
 
 class WindowModel(QAbstractTableModel):
     HEADERS=('窗口标题','句柄','PID','进程路径','位置 (x,y)','尺寸','最小化')
@@ -38,6 +39,8 @@ class WindowDebug(QDialog):
         buttons=QHBoxLayout();self.select=QPushButton('选为目标');self.check=QPushButton('检测目标状态');self.activate=QPushButton('尝试激活目标')
         for b in (self.select,self.check,self.activate):buttons.addWidget(b)
         box.addLayout(buttons);self.message=QLabel('未选择目标');self.message.setWordWrap(True);box.addWidget(self.message)
+        self.input_panel = InputPanel(lambda: self.target, self)
+        box.addWidget(self.input_panel)
         self.refresh.clicked.connect(self.scan);self.select.clicked.connect(self.choose);self.check.clicked.connect(lambda:self.status(False));self.activate.clicked.connect(lambda:self.status(True))
         import sys
         if sys.platform!='win32':
@@ -66,6 +69,8 @@ class WindowDebug(QDialog):
             button.setEnabled(sys.platform == 'win32')
 
     def scan(self):
+        if self.input_panel.worker is not None:
+            self.input_panel.control("stop");self.message.setText("输入任务已请求停止，结束后重新扫描");return
         if self.worker is not None:return
         keyword=self.keyword.text();self.target=None
         self.message.setText('正在后台枚举；请手动核对标题及进程后选择目标')
@@ -85,6 +90,8 @@ class WindowDebug(QDialog):
         self.message.setText(f'发现 {len(windows)} 个候选窗口；尚未选择目标')
 
     def choose(self):
+        if self.input_panel.worker is not None:
+            self.input_panel.control("stop");self.message.setText("目标变化，已请求停止；请结束后重新选择");return
         index=self.table.currentIndex()
         if index.isValid():
             self.target=self.model.windows[index.row()]
@@ -103,11 +110,14 @@ class WindowDebug(QDialog):
         self.run_operation(operation,self.message.setText)
 
     def done(self,result):
+        if not self.input_panel.stop_for_close():return
         if self.worker is not None:self.message.setText('检测执行中，请完成后关闭');return
         super().done(result)
 
     def closeEvent(self, event) -> None:
         """后台操作完成前拒绝关闭，避免销毁仍运行的 QThread。"""
+        if not self.input_panel.stop_for_close():
+            event.ignore(); return
         if self.worker is not None:
             self.message.setText('检测执行中，请完成后关闭')
             event.ignore()
