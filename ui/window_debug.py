@@ -1,5 +1,5 @@
 """用户主动触发的窗口调试界面。"""
-from PySide6.QtCore import QAbstractTableModel,QModelIndex,Qt,QThread,Signal
+from PySide6.QtCore import QAbstractTableModel,QModelIndex,Qt,QThread,Signal,Slot
 from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QLineEdit,QPushButton,QTableView,QLabel,QAbstractItemView
 from automation.windows import WindowService
 
@@ -52,13 +52,21 @@ class WindowDebug(QDialog):
         if self.worker is not None:return
         self.worker=DebugWorker(operation,self)
         for b in (self.refresh,self.select,self.check,self.activate):b.setEnabled(False)
-        self.worker.result.connect(callback);self.worker.error.connect(self.message.setText);self.worker.finished.connect(self.finished);self.worker.start()
+        self.worker.result.connect(callback);self.worker.error.connect(self.message.setText);self.worker.finished.connect(self.on_worker_thread_finished);self.worker.start()
 
-    def finished(self):
-        worker=self.worker;self.worker=None;worker.deleteLater()
-        for b in (self.refresh,self.select,self.check,self.activate):b.setEnabled(True)
+    @Slot()
+    def on_worker_thread_finished(self) -> None:
+        """线程退出后清除引用，延迟释放对象并恢复按钮。"""
+        worker = self.worker
+        self.worker = None
+        if worker is not None:
+            worker.deleteLater()
+        import sys
+        for button in (self.refresh, self.select, self.check, self.activate):
+            button.setEnabled(sys.platform == 'win32')
 
     def scan(self):
+        if self.worker is not None:return
         keyword=self.keyword.text();self.target=None
         self.message.setText('正在后台枚举；请手动核对标题及进程后选择目标')
         def operation():
@@ -97,3 +105,11 @@ class WindowDebug(QDialog):
     def done(self,result):
         if self.worker is not None:self.message.setText('检测执行中，请完成后关闭');return
         super().done(result)
+
+    def closeEvent(self, event) -> None:
+        """后台操作完成前拒绝关闭，避免销毁仍运行的 QThread。"""
+        if self.worker is not None:
+            self.message.setText('检测执行中，请完成后关闭')
+            event.ignore()
+            return
+        super().closeEvent(event)
